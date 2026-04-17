@@ -1,5 +1,6 @@
 #include "leafnet.h"
 #include "intercept.h"
+#include "tcp/redirect.h"
 
 
 //
@@ -64,10 +65,14 @@ NTSTATUS LeafNetInit(IN WDFDEVICE WdfDevice) {
 	BOOLEAN engineOpened = FALSE;
 	BOOLEAN inTransaction = FALSE;
 	BOOLEAN injectionHandleCreated = FALSE;
+	BOOL IsProviderAdded = FALSE;
+	BOOL IsTcpRedirectInited = FALSE;
 
 	FWPM_SESSION session = { 0 };
 
 	InterceptInit();
+
+	DbgBreakPoint();
 	
 	session.flags = FWPM_SESSION_FLAG_DYNAMIC;
 
@@ -95,17 +100,33 @@ NTSTATUS LeafNetInit(IN WDFDEVICE WdfDevice) {
 
 	inTransaction = TRUE;
 
-	status = LeafNetRegisterInterceptSublayer(WdfDevice);
+	status = LeafNetAddProvider(g_WfpHandle);
+	if (!NT_SUCCESS(status)) {
+		KdPrint(("[LeafNet] Wfp provider add failed(ignored), status = 0x%x\n", status));
+	}
+
+	IsProviderAdded = TRUE;
+
+	status = LeafNetRegisterSublayer(WdfDevice, &LEAFNET_PROVIDER);
 	if (!NT_SUCCESS(status)) {
 		KdPrint(("[LeafNet] Wfp register sublayer failed, status = 0x%x\n", status));
 		goto end0;
 	}
 
-	status = LeafNetRegisterInterceptCallouts(WdfDevice);
+	//status = LeafNetRegisterInterceptCallouts(WdfDevice);
+	//if (!NT_SUCCESS(status)) {
+	//	KdPrint(("[LeafNet] Wfp register callouts failed, status = 0x%x\n", status));
+	//	goto end0;
+	//}
+
+	// tcp redirect
+
+	status = TcpRedirectInit(g_WfpHandle, WdfDevice, &LEAFNET_PROVIDER, &LEAFNET_SUB_LAYER);
 	if (!NT_SUCCESS(status)) {
-		KdPrint(("[LeafNet] Wfp register callouts failed, status = 0x%x\n", status));
+		KdPrint(("[LeafNet] Tcp redirect init failed, status = 0x%x\n", status));
 		goto end0;
 	}
+	IsTcpRedirectInited = TRUE;
 
 	status = FwpmTransactionCommit(g_WfpHandle);
 	if (!NT_SUCCESS(status)) {
@@ -123,7 +144,15 @@ end0:
 		}
 
 		if (engineOpened) {
+			if (IsTcpRedirectInited) {
+				TcpRedirectDestroy(g_WfpHandle);
+			}
+
 			LeafNetUnRegisterInterceptCallouts();
+
+			if (IsProviderAdded) {
+				FwpmProviderDeleteByKey(g_WfpHandle, &LEAFNET_PROVIDER);
+			}
 
 			FwpmEngineClose(g_WfpHandle);
 			g_WfpHandle = NULL;
@@ -143,6 +172,12 @@ VOID LeafNetDestroy() {
 	if (g_WfpHandle) {
 		LeafNetUnRegisterInterceptCallouts();
 
+		TcpRedirectDestroy(g_WfpHandle);
+
+		NTSTATUS status = FwpmProviderDeleteByKey(g_WfpHandle, &LEAFNET_PROVIDER);
+		DbgBreakPoint();
+		KdPrint(("%d\n", status));
+
 		FwpmEngineClose(g_WfpHandle);
 		g_WfpHandle = NULL;
 	}
@@ -153,7 +188,21 @@ VOID LeafNetDestroy() {
 	}
 }
 
-NTSTATUS LeafNetRegisterInterceptSublayer(IN WDFDEVICE WdfDevice) {
+NTSTATUS LeafNetAddProvider(IN WDFDEVICE WdfDevice) {
+	UNREFERENCED_PARAMETER(WdfDevice);
+
+	NTSTATUS status = STATUS_SUCCESS;
+
+	FWPM_PROVIDER provider = { 0 };
+	provider.displayData.name = LeafNetProviderName;
+	provider.displayData.description = LeafNetProviderDesc;
+	provider.flags = FWPM_PROVIDER_FLAG_PERSISTENT;
+	provider.providerKey = LEAFNET_PROVIDER;
+	status = FwpmProviderAdd(g_WfpHandle, &provider, NULL);
+	return status;
+}
+
+NTSTATUS LeafNetRegisterSublayer(IN WDFDEVICE WdfDevice, IN const GUID* ProviderKey) {
 	UNREFERENCED_PARAMETER(WdfDevice);
 
 	NTSTATUS status = STATUS_SUCCESS;
@@ -162,10 +211,11 @@ NTSTATUS LeafNetRegisterInterceptSublayer(IN WDFDEVICE WdfDevice) {
 	RtlZeroMemory(&SubLayer, sizeof(FWPM_SUBLAYER));
 
 	SubLayer.subLayerKey = LEAFNET_SUB_LAYER;
-	SubLayer.displayData.name = ExampleSubLayerName;
-	SubLayer.displayData.description = ExampleSubLayerDesc;
+	SubLayer.displayData.name = LeafNetSubLayerName;
+	SubLayer.displayData.description = LeafNetSubLayerDesc;
 	SubLayer.flags = 0;
 	SubLayer.weight = FWP_EMPTY; // auto-weight.
+	SubLayer.providerKey = (GUID*)ProviderKey;
 
 	status = FwpmSubLayerAdd(g_WfpHandle, &SubLayer, NULL);
 

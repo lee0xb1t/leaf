@@ -132,6 +132,7 @@
     <ClCompile Include="tcp\redirect.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="devicecontrol.h" />
     <ClInclude Include="driver.h" />
     <ClInclude Include="intercept.h" />
     <ClInclude Include="leafnet.h" />

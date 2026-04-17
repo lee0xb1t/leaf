@@ -38,22 +38,32 @@ typedef struct _REDIRECT_CONTEXT{
 	// RR_PROXY_TYPE_INCLUDED: proxy only proxy_pids;
 	// RR_PROXY_TYPE_EXCLUDED: proxy all except proxy_pids.
 	HANDLE* proxy_pids;
+
+	USHORT proxy_port;
 }REDIRECT_CONTEXT;
 
 
 NTSTATUS RedirectCtxInit();
+NTSTATUS RedirectCtxInit2(RC_PROTO_TYPE ProtocolType);
 VOID RedirectCtxDestroy();
+VOID RedirectCtxDestroy2(RC_PROTO_TYPE ProtocolType);
+NTSTATUS RedirectCtxReInit(RC_PROTO_TYPE ProtocolType);
 
-VOID RedirectCtxSetProtoType(RC_PROTO_TYPE ProtocolType, RC_PROXY_TYPE ProxyType);
+VOID RedirectCtxSetProxyType(RC_PROTO_TYPE ProtocolType, RC_PROXY_TYPE ProxyType);
 
 NTSTATUS RedirectCtxAddPid(RC_PROTO_TYPE ProtocolType, RC_PID_TYPE PidType, const HANDLE pid);
 
 NTSTATUS RedirectCtxAddBypassPid(RC_PROTO_TYPE ProtocolType, const HANDLE pid);
 NTSTATUS RedirectCtxAddProxyPid(RC_PROTO_TYPE ProtocolType, const HANDLE pid);
 
+HANDLE RedirectCtxGetFirstBypassPid(RC_PROTO_TYPE ProtocolType);
+
 BOOL RedirectCtxIsBypassProcess(RC_PROTO_TYPE ProtocolType, const HANDLE pid);
 BOOL RedirectCtxIsProxyProcess(RC_PROTO_TYPE ProtocolType, const HANDLE pid);
 
-RC_PROXY_TYPE RedirectCtxGetProtoType(RC_PROTO_TYPE ProtocolType);
+RC_PROXY_TYPE RedirectCtxGetProxyType(RC_PROTO_TYPE ProtocolType);
+
+USHORT RedirectCtxGetProxyPort(RC_PROTO_TYPE ProtocolType);
+VOID RedirectCtxSetProxyPort(RC_PROTO_TYPE ProtocolType, USHORT Port);
 
 #endif

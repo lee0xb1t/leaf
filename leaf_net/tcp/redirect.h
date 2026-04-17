@@ -2,6 +2,7 @@
 #define __TCP_REDIRECT_H
 
 #include "../driver.h"
+#include "../redirectctx.h"
 
 // {0E029FD0-FAEC-4855-9224-4542C95DE690}
 DEFINE_GUID(TCP_REDIRECT_ALE_CONNECT_V4_CALLOUT,
@@ -20,10 +21,27 @@ DEFINE_GUID(TCP_REDIRECT_ALE_CONNECT_FILTER_V6,
 	0x5133153f, 0x73ea, 0x46e5, 0xa5, 0xfa, 0xd4, 0x33, 0x18, 0xd7, 0xd8, 0x7b);
 
 
+typedef struct _REDIRECT_DATA {
+	HANDLE process_id;
+
+#pragma warning(push)
+#pragma warning(disable: 4201) //NAMELESS_STRUCT_UNION
+	union
+	{
+		FWP_BYTE_ARRAY16 ipv6_remote_addr;
+		UINT32 ipv4_remote_addr;
+	};
+#pragma warning(pop)
+	USHORT remote_port;
+
+	USHORT local_port;
+}REDIRECT_DATA;
+
+
 
 NTSTATUS TcpRedirectInit(
 	IN HANDLE WfpHandle,
-	IN OUT PDEVICE_OBJECT DeviceObj, 
+	IN OUT WDFDEVICE WdfDevice, 
 	IN const GUID* ProviderKey,
 	IN const GUID* SubLayerKey
 );

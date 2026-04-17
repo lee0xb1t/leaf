@@ -1,9 +1,13 @@
 #include "driver.h"
 #include "main.h"
 #include "leafnet.h"
+#include "devicecontrol.h"
+#include "redirectctx.h"
 
 #define LEAF_DEVICE_NAME		L"\\Device\\Leaf_NetFilter"
 #define LEAF_SYM_NAME			L"\\??\\Leaf_NetFilter"
+
+WDFQUEUE g_WdfQueue;
 
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT DrvObj, PUNICODE_STRING RegistryPath) {
@@ -13,6 +17,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DrvObj, PUNICODE_STRING RegistryPath) {
 	WDFDEVICE WdfDevice;
 
 	BOOLEAN IsLeafInit = FALSE;
+	BOOL IsRedirectCtxInit = FALSE;
 	
 	status = InitWdfObjects(DrvObj, RegistryPath, &WdfDriver, &WdfDevice);
 	if (!NT_SUCCESS(status)) {
@@ -24,12 +29,21 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DrvObj, PUNICODE_STRING RegistryPath) {
 		goto end0;
 	}
 	IsLeafInit = TRUE;
-	
+
+	status = RedirectCtxInit();
+	if (!NT_SUCCESS(status)) {
+		goto end0;
+	}
+	IsRedirectCtxInit = TRUE;
 
 end0:
 	if (!NT_SUCCESS(status)) {
 		if (IsLeafInit) {
 			LeafNetDestroy();
+		}
+
+		if (IsRedirectCtxInit) {
+			RedirectCtxDestroy();
 		}
 	}
 	return status;
@@ -57,6 +71,8 @@ NTSTATUS InitWdfObjects(
 
 	UNICODE_STRING DeviceName = RTL_CONSTANT_STRING(LEAF_DEVICE_NAME);
 	UNICODE_STRING SymName = RTL_CONSTANT_STRING(LEAF_SYM_NAME);
+
+	WDF_IO_QUEUE_CONFIG IoQueueConfig;
 
 
 	WDF_DRIVER_CONFIG_INIT(&WdfDriverConf, WDF_NO_EVENT_CALLBACK);
@@ -104,22 +120,15 @@ NTSTATUS InitWdfObjects(
 	}
 
 
-	/*
-	WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&ioQueueConfig,
-                                    WdfIoQueueDispatchSequential);
-    ioQueueConfig.EvtIoRead = FileEvtIoRead;
-    ioQueueConfig.EvtIoWrite = FileEvtIoWrite;
-    ioQueueConfig.EvtIoDeviceControl = FileEvtIoDeviceControl;
-    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    status = WdfIoQueueCreate(controlDevice,
-                              &ioQueueConfig,
-                              &attributes,
-                              &queue // pointer to default queue
-                              );
+	WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&IoQueueConfig, WdfIoQueueDispatchParallel);
+	IoQueueConfig.EvtIoDeviceControl = IoDeviceControl;
+    status = WdfIoQueueCreate(WdfDevice,
+                              &IoQueueConfig,
+                              WDF_NO_OBJECT_ATTRIBUTES,
+                              &g_WdfQueue);
     if (!NT_SUCCESS(status)) {
-        goto End;
+        goto end0;
     }
-	*/
 
 	WdfControlFinishInitializing(WdfDevice);
 
@@ -129,4 +138,79 @@ NTSTATUS InitWdfObjects(
 end0:
 	if (pWdfDeviceInit) WdfDeviceInitFree(pWdfDeviceInit);
 	return status;
+}
+
+VOID
+IoDeviceControl(
+	_In_ WDFQUEUE Queue,
+	_In_ WDFREQUEST Request,
+	_In_ size_t OutputBufferLength,
+	_In_ size_t InputBufferLength,
+	_In_ ULONG IoControlCode
+) {
+	UNREFERENCED_PARAMETER(Queue);
+	UNREFERENCED_PARAMETER(Request);
+	UNREFERENCED_PARAMETER(OutputBufferLength);
+	UNREFERENCED_PARAMETER(InputBufferLength);
+	UNREFERENCED_PARAMETER(IoControlCode);
+
+	NTSTATUS status = STATUS_SUCCESS;
+	ULONG_PTR information = 0;
+
+	HANDLE current_pid = (HANDLE)IoGetRequestorProcessId(WdfRequestWdmGetIrp(Request));;
+
+	switch (IoControlCode) {
+	case IOCTL_PROXY_TCP_INIT:
+		status = RedirectCtxAddBypassPid(RC_PROTO_TYPE_TCP, current_pid);
+		if (!NT_SUCCESS(status)) {
+			goto end0;
+		}
+		RedirectCtxSetProxyType(RC_PROTO_TYPE_TCP, RC_PROXY_TYPE_INCLUDED);
+		KdPrint(("Set process id: %p successful\n", current_pid));
+		break;
+	case IOCTL_PROXY_TCP_SET_INCLUDED:
+		RedirectCtxSetProxyType(RC_PROTO_TYPE_TCP, RC_PROXY_TYPE_INCLUDED);
+		break;
+	case IOCTL_PROXY_TCP_SET_EXCLUDED:
+		RedirectCtxSetProxyType(RC_PROTO_TYPE_TCP, RC_PROXY_TYPE_EXCLUDED);
+		break;
+	case IOCTL_PROXY_TCP_SET_PORT:
+	{
+		USHORT* Port = 0;
+		size_t Length = 0;
+		status = WdfRequestRetrieveInputBuffer(Request, sizeof(USHORT), &Port, &Length);
+		if (!NT_SUCCESS(status)) {
+			goto end0;
+		}
+		RedirectCtxSetProxyPort(RC_PROTO_TYPE_TCP, *Port);
+		break;
+	}
+	case IOCTL_PROXY_TCP_ADD_PROCESS:
+	{
+		HANDLE* Pid = 0;
+		size_t Length = 0;
+		status = WdfRequestRetrieveInputBuffer(Request, sizeof(HANDLE), (PVOID*)&Pid, &Length);
+		if (!NT_SUCCESS(status)) {
+			goto end0;
+		}
+		status = RedirectCtxAddProxyPid(RC_PROTO_TYPE_TCP, *Pid);
+		if (!NT_SUCCESS(status)) {
+			goto end0;
+		}
+		break;
+	}
+	case IOCTL_PROXY_TCP_DESTROY:
+	{
+		status = RedirectCtxReInit(RC_PROTO_TYPE_TCP);
+		if (!NT_SUCCESS(status)) {
+			goto end0;
+		}
+		break;
+	}
+	default:
+		break;
+	}
+
+end0:
+	WdfRequestCompleteWithInformation(Request, status, information);
 }

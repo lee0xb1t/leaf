@@ -3,8 +3,15 @@
 
 #include "driver.h"
 
-#define ExampleSubLayerName			L"LeafNet sublayer"
-#define ExampleSubLayerDesc			L"LeafNet sublayer description"
+#define LeafNetProviderName			L"LeafNet provider"
+#define LeafNetProviderDesc			L"LeafNet provider description"
+// {A6CC604A-D211-422D-AE9F-B65E1D8CD0CD}
+DEFINE_GUID(LEAFNET_PROVIDER,
+	0xa6cc604a, 0xd211, 0x422d, 0xae, 0x9f, 0xb6, 0x5e, 0x1d, 0x8c, 0xd0, 0xcd);
+
+
+#define LeafNetSubLayerName			L"LeafNet sublayer"
+#define LeafNetSubLayerDesc			L"LeafNet sublayer description"
 // {75295F5D-7BF8-4F2A-BF83-B8E0455D8DFD}
 DEFINE_GUID(LEAFNET_SUB_LAYER,
 	0x75295f5d, 0x7bf8, 0x4f2a, 0xbf, 0x83, 0xb8, 0xe0, 0x45, 0x5d, 0x8d, 0xfd);
@@ -84,15 +91,12 @@ DEFINE_GUID(INTERCEPT_OUTBOUND_TRANSPORT_V6_FILTER,
 	0x5229a327, 0x5079, 0x4e76, 0xb5, 0x4d, 0x9d, 0xad, 0x96, 0x35, 0x16, 0x7);
 
 
-
-
-
-
-
 NTSTATUS LeafNetInit(IN WDFDEVICE WdfDevice);
 VOID LeafNetDestroy();
 
-NTSTATUS LeafNetRegisterInterceptSublayer(IN WDFDEVICE WdfDevice);
+NTSTATUS LeafNetAddProvider(IN WDFDEVICE WdfDevice);
+
+NTSTATUS LeafNetRegisterSublayer(IN WDFDEVICE WdfDevice, IN const GUID* ProviderKey);
 
 NTSTATUS LeafNetRegisterInterceptCallouts(IN WDFDEVICE WdfDevice);
 VOID LeafNetUnRegisterInterceptCallouts();

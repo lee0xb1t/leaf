@@ -1,11 +1,14 @@
 #include "redirect.h"
 #include "../redirectctx.h"
+#include <mstcpip.h>
 
 //
 // Variables
 //
 
 HANDLE g_Redirecthandle = NULL;
+
+PIO_WORKITEM g_RedirectWorkItem = NULL;
 
 
 //
@@ -66,7 +69,7 @@ NTSTATUS TcpRedirectpAleCNotify(
 
 NTSTATUS TcpRedirectInit(
 	IN HANDLE WfpHandle,
-	IN OUT PDEVICE_OBJECT DeviceObj,
+	IN OUT WDFDEVICE WdfDevice,
 	IN const GUID* ProviderKey,
 	IN const GUID* SubLayerKey
 )
@@ -76,6 +79,19 @@ NTSTATUS TcpRedirectInit(
 	BOOL IsV4Inited = FALSE;
 	BOOL IsV6Inited = FALSE;
 	BOOL IsRedirectHandleCreated = FALSE;
+	BOOL IsWorkItemInited = FALSE;
+
+	PDEVICE_OBJECT DeviceObj = WdfDeviceWdmGetDeviceObject(WdfDevice);
+
+	g_RedirectWorkItem = IoAllocateWorkItem(DeviceObj);
+
+	if (!g_RedirectWorkItem) {
+		KdPrint(("[LeafNet] Tcp redirect workitem init failed, status = 0x%x\n", status));
+		goto end0;
+	}
+
+	IsWorkItemInited = TRUE;
+
 
 	status = FwpsRedirectHandleCreate(ProviderKey, 0, &g_Redirecthandle);
 	if (!NT_SUCCESS(status)) {
@@ -133,6 +149,10 @@ end0:
 		if (IsRedirectHandleCreated) {
 			FwpsRedirectHandleDestroy(g_Redirecthandle);
 		}
+
+		if (IsWorkItemInited) {
+			IoFreeWorkItem(g_RedirectWorkItem);
+		}
 	}
 
 	return status;
@@ -141,6 +161,10 @@ end0:
 VOID TcpRedirectDestroy(IN HANDLE WfpHandle) {
 	TcpRedirectpAleConnectV4CalloutDestroy(WfpHandle);
 	TcpRedirectpAleConnectV6CalloutDestroy(WfpHandle);
+
+	if (g_RedirectWorkItem) {
+		IoFreeWorkItem(g_RedirectWorkItem);
+	}
 }
 
 NTSTATUS TcpRedirectpAleConnectCalloutInit(
@@ -337,11 +361,11 @@ VOID TcpRedirectpAleCClassify(
 	_Inout_ FWPS_CLASSIFY_OUT* classifyOut
 ) 
 {
-	UNREFERENCED_PARAMETER(classifyContext);
-	UNREFERENCED_PARAMETER(filter);
 	UNREFERENCED_PARAMETER(flowContext);
 	UNREFERENCED_PARAMETER(inFixedValues);
 	UNREFERENCED_PARAMETER(layerData);
+
+	NTSTATUS status = STATUS_SUCCESS;
 
 	HANDLE process_id = NULL;
 	BOOL is_bypass_process = FALSE;
@@ -351,8 +375,26 @@ VOID TcpRedirectpAleCClassify(
 
 	PVOID pRedirectContext = NULL;
 
-	if (classifyOut->rights & FWPS_RIGHT_ACTION_WRITE) {
-		return;
+	UINT64 ClassifyHandle = 0;
+	BOOL IsCreateClassifyHandle = FALSE;
+	PVOID WritableLayerData = NULL;
+	FWPS_CONNECT_REQUEST* ConnectRequest = NULL;
+
+	ADDRESS_FAMILY addrf = (inFixedValues->layerId == FWPS_LAYER_ALE_CONNECT_REDIRECT_V4) ? AF_INET : AF_INET6;
+
+	if (!(classifyOut->rights & FWPS_RIGHT_ACTION_WRITE)) {
+		goto end0;
+	}
+
+	if (!classifyContext) {
+		classifyOut->actionType = FWP_ACTION_PERMIT;
+		goto end0;
+	}
+
+	// TODO: ipv6
+	if (addrf == AF_INET6) {
+		classifyOut->actionType = FWP_ACTION_PERMIT;
+		goto end0;
 	}
 
 
@@ -389,18 +431,21 @@ VOID TcpRedirectpAleCClassify(
 #endif
 
 	if (FWPS_IS_METADATA_FIELD_PRESENT(inMetaValues, FWPS_METADATA_FIELD_PROCESS_ID)) {
-		process_id = FwpsQueryConnectionRedirectState(inMetaValues->redirectRecords, g_Redirecthandle, &pRedirectContext);
+		process_id = (HANDLE)inMetaValues->processId;
 	}
+
 	if (!process_id) {
+		classifyOut->actionType = FWP_ACTION_PERMIT;
 		goto end0;
 	}
 
 	is_bypass_process = RedirectCtxIsBypassProcess(RC_PROTO_TYPE_TCP, process_id);
 	if (is_bypass_process) {
+		classifyOut->actionType = FWP_ACTION_PERMIT;
 		goto end0;
 	}
 
-	proxy_type = RedirectCtxGetProtoType(RC_PROTO_TYPE_TCP);
+	proxy_type = RedirectCtxGetProxyType(RC_PROTO_TYPE_TCP);
 	is_proxy_process = RedirectCtxIsProxyProcess(RC_PROTO_TYPE_TCP, process_id);
 	if (is_bypass_process && proxy_type == RC_PROXY_TYPE_INCLUDED) {
 		is_proxy = TRUE;
@@ -409,14 +454,107 @@ VOID TcpRedirectpAleCClassify(
 	}
 
 	if (!is_proxy) {
+		classifyOut->actionType = FWP_ACTION_PERMIT;
 		goto end0;
 	}
 
-	// TODO
+	/*
+	RedirectData = ExAllocatePool3(POOL_FLAG_NON_PAGED, sizeof(REDIRECT_DATA), 'tcdR', NULL, 0);
+	if (!RedirectData) {
+		classifyOut->actionType = FWP_ACTION_PERMIT;
+		goto end0;
+	}
 
+	RedirectData->process_id = process_id;
+
+	if (addrf == AF_INET) {
+		RedirectData->ipv4_remote_addr =  RtlUlongByteSwap(
+				inFixedValues->incomingValue[FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_REMOTE_ADDRESS].value.uint32
+			);
+	} else {
+		// TODO: ipv6
+	}
+	RedirectData->remote_port = RtlUshortByteSwap(
+			inFixedValues->incomingValue[FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_REMOTE_PORT].value.uint16
+		);
+	RedirectData->local_port = RtlUshortByteSwap(
+		inFixedValues->incomingValue[FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_LOCAL_PORT].value.uint16
+	);
+	*/
+
+	status = FwpsAcquireClassifyHandle((PVOID)classifyContext, 0, &ClassifyHandle);
+	if (!NT_SUCCESS(status)) {
+		classifyOut->actionType = FWP_ACTION_PERMIT;
+		goto end0;
+	}
+
+	IsCreateClassifyHandle = TRUE;
+
+	status = FwpsAcquireWritableLayerDataPointer(
+		ClassifyHandle,
+		filter->filterId,
+		0,
+		&WritableLayerData,
+		classifyOut
+	);
+	if (!NT_SUCCESS(status)) {
+		goto end0;
+	}
+	
+	ConnectRequest = (FWPS_CONNECT_REQUEST*)WritableLayerData;
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+	ConnectRequest->localRedirectHandle = g_Redirecthandle;
+#endif
+
+#pragma warning(push)
+#pragma warning(disable: 4311)
+	ConnectRequest->localRedirectTargetPID = (DWORD)RedirectCtxGetFirstBypassPid(RC_PROTO_TYPE_TCP);
+#pragma warning(pop)
 	
 
+	if (INETADDR_ISANY((PSOCKADDR)&(ConnectRequest->localAddressAndPort))) {
+		INETADDR_SETLOOPBACK((PSOCKADDR)&(ConnectRequest->remoteAddressAndPort));
+	} else {
+		INETADDR_SET_ADDRESS((PSOCKADDR) & (ConnectRequest->remoteAddressAndPort),
+			INETADDR_ADDRESS((PSOCKADDR) & (ConnectRequest->localAddressAndPort)));
+	}
+
+	USHORT port = RtlUshortByteSwap(RedirectCtxGetProxyPort(RC_PROTO_TYPE_TCP));
+	INETADDR_SET_PORT((PSOCKADDR)&(ConnectRequest->remoteAddressAndPort), port);
+
+	FwpsApplyModifiedLayerData(
+		ClassifyHandle,
+		WritableLayerData,
+		0
+	);
+
+
+	FwpsReleaseClassifyHandle(ClassifyHandle);
+
+	classifyOut->actionType = FWP_ACTION_PERMIT;
+	classifyOut->rights &= ~FWPS_RIGHT_ACTION_WRITE;
+
+	SOCKADDR_IN* addr = (SOCKADDR_IN*)&ConnectRequest->remoteAddressAndPort;
+	KdPrint(("[LeafNet] Redirect target: %d.%d.%d.%d:%d\n",
+		addr->sin_addr.S_un.S_un_b.s_b1,
+		addr->sin_addr.S_un.S_un_b.s_b2,
+		addr->sin_addr.S_un.S_un_b.s_b3,
+		addr->sin_addr.S_un.S_un_b.s_b4,
+		RtlUshortByteSwap(addr->sin_port)));
+
 end0:
+	if (!NT_SUCCESS(status)) {
+		if (IsCreateClassifyHandle) {
+			FwpsReleaseClassifyHandle(ClassifyHandle);
+		}
+
+		if (is_proxy) {
+			classifyOut->actionType = FWP_ACTION_BLOCK;
+			classifyOut->rights &= ~FWPS_RIGHT_ACTION_WRITE;
+		}
+	}
+
 	return;
 }
 
