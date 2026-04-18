@@ -1,5 +1,6 @@
 #include "redirect.h"
 #include "../redirectctx.h"
+#include "../common.h"
 #include <mstcpip.h>
 
 //
@@ -164,6 +165,7 @@ VOID TcpRedirectDestroy(IN HANDLE WfpHandle) {
 
 	if (g_RedirectWorkItem) {
 		IoFreeWorkItem(g_RedirectWorkItem);
+		g_RedirectWorkItem = NULL;
 	}
 }
 
@@ -380,6 +382,8 @@ VOID TcpRedirectpAleCClassify(
 	PVOID WritableLayerData = NULL;
 	FWPS_CONNECT_REQUEST* ConnectRequest = NULL;
 
+	BOOL IsLAN = FALSE;
+
 	ADDRESS_FAMILY addrf = (inFixedValues->layerId == FWPS_LAYER_ALE_CONNECT_REDIRECT_V4) ? AF_INET : AF_INET6;
 
 	if (!(classifyOut->rights & FWPS_RIGHT_ACTION_WRITE)) {
@@ -454,6 +458,23 @@ VOID TcpRedirectpAleCClassify(
 	}
 
 	if (!is_proxy) {
+		classifyOut->actionType = FWP_ACTION_PERMIT;
+		goto end0;
+	}
+
+
+	if (addrf == AF_INET) {
+		UINT32 ipv4_remote_addr = RtlUlongByteSwap(
+			inFixedValues->incomingValue[FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_REMOTE_ADDRESS].value.uint32
+		);
+		IsLAN = CommonIsIpv4LAN(ipv4_remote_addr);
+	}
+	else {
+		// TODO: ipv6
+		IsLAN = TRUE;
+	}
+
+	if (IsLAN) {
 		classifyOut->actionType = FWP_ACTION_PERMIT;
 		goto end0;
 	}
