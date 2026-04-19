@@ -122,7 +122,7 @@ func LeafTcpSetPort(fileHandle windows.Handle, port uint16) error {
 
 	err := windows.DeviceIoControl(
 		fileHandle,
-		IOCTL_PROXY_TCP_SET_EXCLUDED,
+		IOCTL_PROXY_TCP_SET_PORT,
 		&portBytes[0], 2,
 		nil, 0,
 		&bytesReturned,

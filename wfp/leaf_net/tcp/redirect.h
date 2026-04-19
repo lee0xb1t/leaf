@@ -24,17 +24,8 @@ DEFINE_GUID(TCP_REDIRECT_ALE_CONNECT_FILTER_V6,
 typedef struct _REDIRECT_DATA {
 	HANDLE process_id;
 
-#pragma warning(push)
-#pragma warning(disable: 4201) //NAMELESS_STRUCT_UNION
-	union
-	{
-		FWP_BYTE_ARRAY16 ipv6_remote_addr;
-		UINT32 ipv4_remote_addr;
-	};
-#pragma warning(pop)
-	USHORT remote_port;
-
-	USHORT local_port;
+	SOCKADDR_STORAGE peerAddress;
+	SOCKADDR_STORAGE originAddress;
 }REDIRECT_DATA;
 
 

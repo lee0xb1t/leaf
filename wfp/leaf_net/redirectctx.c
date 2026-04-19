@@ -406,5 +406,5 @@ VOID RedirectCtxSetProxyPort(RC_PROTO_TYPE ProtocolType, USHORT Port) {
         g_UdpRedirectCtx->proxy_port = Port;
     }
 
-    ExAcquirePushLockExclusive(pLock);
+    ExReleasePushLockExclusive(pLock);
 }

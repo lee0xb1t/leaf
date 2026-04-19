@@ -136,7 +136,7 @@ int listen() {
     //------------------------------------------------------------
 
     //// --- 步骤 3 & 4: 查询 WFP 重定向信息 ---
-
+    SIO_QUERY_WFP_CONNECTION_REDIRECT_RECORDS;
     //// 3. 先查询重定向记录 (redirect records)
     //// 第一次调用，获取所需缓冲区大小
     //result = WSAIoctl(
@@ -169,7 +169,7 @@ int listen() {
     //    goto cleanup;
     //}
     //// redirectRecords 中现在包含了驱动设置的不透明数据，可用于验证或关联 
-
+    setsockopt;
     //// 4. 查询重定向上下文 (redirect context)，它包含了原始目标地址
     //// WFP 会将原始目标地址/端口放在此上下文的开头
     //result = WSAIoctl(

@@ -1,106 +1,122 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log"
+	"net"
+	"sync"
 
 	"github.com/txthinking/socks5"
 	"golang.org/x/sys/windows"
+	"lee0xb1t.com/leafsdk/ctx"
 	"lee0xb1t.com/leafsdk/leaf"
+)
+
+const (
+	SIO_QUERY_WFP_CONNECTION_REDIRECT_RECORDS = 0x980000DC
+	SIO_QUERY_WFP_CONNECTION_REDIRECT_CONTEXT = 0x980000DD
 )
 
 var (
 	socks5Client *socks5.Client
-	wsdData      windows.WSAData
 	leafHandle   windows.Handle
+
+	wg sync.WaitGroup
 )
 
 func listen(port uint16) {
-	version := uint32(0x0202)
-	err := windows.WSAStartup(version, &wsdData)
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
-		log.Panicf("[PROXY] WSAStartup start failed: %s\n", err)
+		log.Fatal(err)
 	}
-	defer windows.WSACleanup()
-
-	listenSockHandle, err := windows.Socket(windows.AF_INET, windows.SOCK_STREAM, windows.IPPROTO_TCP)
-	if err != nil {
-		log.Panicf("[PROXY] Create socket handle failed: %s\n", err)
-	}
-	defer windows.Close(listenSockHandle)
-
-	sockAddr := &windows.SockaddrInet4{
-		Addr: [4]byte{0, 0, 0, 0},
-		Port: 8888,
-	}
-
-	err = windows.Bind(listenSockHandle, sockAddr)
-	if err != nil {
-		log.Panicf("[PROXY] Socket bind error: %v", sockAddr)
-	}
-	log.Printf("[PROXY] Socket bind successful: %v", sockAddr)
-
-	err = windows.Listen(listenSockHandle, windows.SOMAXCONN)
-	if err != nil {
-		log.Panicf("[PROXY] Socket listen error: %v", sockAddr)
-	}
-	log.Printf("[PROXY] Socket listen successful: %v", sockAddr)
-
-	log.Printf("[PROXY] Start listening...")
 
 	for {
-		accpetHandle, fromSa, err := windows.Accept(listenSockHandle)
+		c, err := ln.Accept()
 		if err != nil {
-			log.Printf("[PROXY] Accpet error(ignored): %v", sockAddr)
+			log.Print(err)
 			continue
 		}
 
 		go func() {
-			log.Printf("[PROXY] Accpet new connection from: %v", fromSa)
+			defer c.Close()
 
-			// TODO: read remote addr & set socks5 proxy
+			clientAddr := c.RemoteAddr().(*net.TCPAddr)
+			clientIP := clientAddr.IP
+			clientPort := uint16(clientAddr.Port)
+
+			tcpConn, ok := c.(*net.TCPConn)
+			if !ok {
+				return
+			}
+			f, err := tcpConn.File()
+			if err != nil {
+				return
+			}
+			defer f.Close()
+
+			sockHandle := windows.Handle(f.Fd())
+
 			//------------------------------
-			socks5Conn, _ := socks5Client.Dial("tcp", "baidu.com:80")
+			bytesContext, err := ctx.QueryRedirectContext(sockHandle)
+			if err != nil {
+				log.Fatalln("[PROXY] failed to query redirect context:", err)
+			}
+			redirectContext, err := ctx.ParseRedirectContext(bytesContext)
+			if err != nil {
+				log.Fatalln("[PROXY] failed to parse redirect context:", err)
+			}
+
+			targetAddr := fmt.Sprintf("%s:%d", redirectContext.Peer.IP.String(), redirectContext.Peer.Port)
+
+			//------------------------------
+			socks5Conn, err := socks5Client.Dial("tcp", targetAddr)
+			if err != nil {
+				log.Printf("[PROXY] SOCKS5 dial failed: %v", err)
+				return
+			}
+			log.Printf("[PROXY] Connect to socks5 server and proxy %s\n", fmt.Sprintf("%s:%d", redirectContext.Peer.IP.String(), redirectContext.Peer.Port))
 			defer socks5Conn.Close()
 			//------------------------------
 
-			defer windows.Close(accpetHandle)
+			var wg sync.WaitGroup
+			wg.Add(2)
 
-			// response := "HTTP/1.1 200 Connection Established\r\nProxy-Agent: LeafNetProxy\r\n"
-			readBytes := make([]byte, 4096)
-			writeBytes := make([]byte, 4096)
-
-			for {
-				n, err := windows.Read(accpetHandle, readBytes)
-				if err != nil {
-					break
+			go func() {
+				defer wg.Done()
+				_, err := io.Copy(socks5Conn, c)
+				if err != nil && err != io.EOF {
+					log.Printf("[PROXY] Client -> Target error: %v", err)
 				}
-
-				if n > 0 {
-					data := readBytes[:n]
-					socks5Conn.Write(data)
+				if tcpConn, ok := socks5Conn.(*net.TCPConn); ok {
+					tcpConn.CloseWrite()
 				}
-			}
+			}()
 
-			for {
-				n, err := socks5Conn.Read(writeBytes)
-				if err != nil {
-					break
+			go func() {
+				defer wg.Done()
+				_, err := io.Copy(c, socks5Conn)
+				if err != nil && err != io.EOF {
+					log.Printf("[PROXY] Target -> Client error: %v", err)
 				}
-
-				if n > 0 {
-					data := writeBytes[:n]
-					windows.Write(accpetHandle, data)
+				if tcpConn, ok := c.(*net.TCPConn); ok {
+					tcpConn.CloseWrite()
 				}
-			}
+			}()
 
+			wg.Wait()
+
+			log.Printf("[PROXY] Tunnel closed: %s:%d", clientIP, clientPort)
 		}()
 	}
 }
 
 func main() {
 	var err error
-	server := "127.0.0.1:53417"
+	server := "192.168.110.1:10801"
 	var port uint16 = 8888
+
+	wg.Add(1)
 
 	socks5Client, err = socks5.NewClient(server, "", "", 5000, 5000)
 	if err != nil {
@@ -112,23 +128,25 @@ func main() {
 
 	leafHandle, err = leaf.LeafInit()
 	if err != nil {
-		log.Panicln("[PROXY] Leaf init failed")
+		log.Panicln("[PROXY] Leaf init failed:", err)
 	}
 	defer leaf.LeafDestroy(leafHandle)
 
 	err = leaf.LeafTcpInit(leafHandle)
 	if err != nil {
-		log.Panicln("[PROXY] Leaf tcp init failed")
+		log.Panicln("[PROXY] Leaf tcp init failed:", err)
 	}
 	defer leaf.LeafTcpDestroy(leafHandle)
 
 	err = leaf.LeafTcpSetExcluded(leafHandle)
 	if err != nil {
-		log.Panicln("[PROXY] Leaf tcp set excluded flag failed")
+		log.Panicln("[PROXY] Leaf tcp set excluded flag failed:", err)
 	}
 
 	err = leaf.LeafTcpSetPort(leafHandle, port)
 	if err != nil {
-		log.Panicf("[PROXY] Leaf tcp set port: %d failed\n", port)
+		log.Panicf("[PROXY] Leaf tcp set port: %d failed: %s\n", port, err)
 	}
+
+	wg.Wait()
 }

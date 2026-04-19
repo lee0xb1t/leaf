@@ -544,6 +544,40 @@ VOID TcpRedirectpAleCClassify(
 	USHORT port = RtlUshortByteSwap(RedirectCtxGetProxyPort(RC_PROTO_TYPE_TCP));
 	INETADDR_SET_PORT((PSOCKADDR)&(ConnectRequest->remoteAddressAndPort), port);
 
+
+
+	//---------------------------------------------
+	REDIRECT_DATA* redirectContext =
+		(REDIRECT_DATA*)ExAllocatePoolWithTag(
+			NonPagedPoolNx,
+			sizeof(REDIRECT_DATA),
+			'LRdC'
+		);
+
+	if (redirectContext) {
+		RtlZeroMemory(redirectContext, sizeof(REDIRECT_DATA));
+
+		if (addrf == AF_INET) {
+			SOCKADDR_IN* peerAddr = (SOCKADDR_IN*)&redirectContext->peerAddress;
+			peerAddr->sin_family = AF_INET;
+			peerAddr->sin_port = inFixedValues->incomingValue[FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_REMOTE_PORT].value.uint16;
+			peerAddr->sin_addr.S_un.S_addr = inFixedValues->incomingValue[FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_REMOTE_ADDRESS].value.uint32;
+		}
+		// TODO: Ìí¼Ó IPv6 Ö§³Ö
+
+		SOCKADDR_IN* originAddr = (SOCKADDR_IN*)&redirectContext->originAddress;
+		originAddr->sin_family = AF_INET;
+		originAddr->sin_port = inFixedValues->incomingValue[FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_LOCAL_PORT].value.uint16;
+		originAddr->sin_addr.S_un.S_addr = inFixedValues->incomingValue[FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_LOCAL_ADDRESS].value.uint32;
+
+		ConnectRequest->localRedirectContext = redirectContext;
+		ConnectRequest->localRedirectContextSize = sizeof(REDIRECT_DATA);
+	}
+	//---------------------------------------------
+
+
+
+
 	FwpsApplyModifiedLayerData(
 		ClassifyHandle,
 		WritableLayerData,
